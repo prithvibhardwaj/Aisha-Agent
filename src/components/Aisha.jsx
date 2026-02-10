@@ -1,64 +1,47 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Mic, Send, Sparkles, LogOut, Volume2, VolumeX } from 'lucide-react';
+import { Mic, MicOff, LogOut, Volume2, VolumeX, Sparkles } from 'lucide-react';
 
 const FEE_AMOUNT = "250 AED";
 
 const Aisha = ({ user, onLogout }) => {
-  const [messages, setMessages] = useState([]);
-  const [inputText, setInputText] = useState("");
-  const [isListening, setIsListening] = useState(false);
-  const [isVoiceEnabled, setIsVoiceEnabled] = useState(true); // Default: ON
-  const [requestStatus, setRequestStatus] = useState("idle"); 
+  const [status, setStatus] = useState("idle"); // idle, listening, processing, speaking
+  const [transcript, setTranscript] = useState("");
+  const [lastResponse, setLastResponse] = useState("");
+  const [isVoiceEnabled, setIsVoiceEnabled] = useState(true);
+  const [showSuccessCard, setShowSuccessCard] = useState(false);
   
-  const chatEndRef = useRef(null);
   const residentName = user?.name || "Resident";
 
-  // --- 1. ROBUST VOICE ENGINE ---
+  // --- 1. VOICE SYNTHESIS (Speaking) ---
   const speak = (text) => {
     if (!isVoiceEnabled || !window.speechSynthesis) return;
+    
+    window.speechSynthesis.cancel();
+    setStatus("speaking");
+    setLastResponse(text);
 
-    // Helper to actually trigger the speech
-    const triggerSpeech = () => {
-      window.speechSynthesis.cancel(); // Stop previous
+    const utterance = new SpeechSynthesisUtterance(text);
+    const voices = window.speechSynthesis.getVoices();
+    const femaleVoice = voices.find(v => 
+      v.name.includes('Google US English') || 
+      v.name.includes('Samantha') || 
+      v.name.includes('Female')
+    );
+    
+    if (femaleVoice) utterance.voice = femaleVoice;
+    utterance.lang = 'en-US'; 
+    utterance.rate = 1;
 
-      const utterance = new SpeechSynthesisUtterance(text);
-      const voices = window.speechSynthesis.getVoices();
-      
-      // Try to find a good female voice
-      const femaleVoice = voices.find(v => 
-        v.name.includes('Google US English') || 
-        v.name.includes('Samantha') || 
-        v.name.includes('Female')
-      );
-      
-      if (femaleVoice) utterance.voice = femaleVoice;
-      utterance.lang = 'en-US'; 
-      utterance.rate = 1;
+    // Reset to idle when done speaking
+    utterance.onend = () => setStatus("idle");
 
-      window.speechSynthesis.speak(utterance);
-    };
-
-    // Chrome specific: Voices load asynchronously
-    if (window.speechSynthesis.getVoices().length === 0) {
-      window.speechSynthesis.onvoiceschanged = () => {
-        triggerSpeech();
-        window.speechSynthesis.onvoiceschanged = null; // Remove listener after use
-      };
-    } else {
-      triggerSpeech();
-    }
+    window.speechSynthesis.speak(utterance);
   };
 
-  const toggleVoice = () => {
-    const newState = !isVoiceEnabled;
-    setIsVoiceEnabled(newState);
-    if (!newState) {
-      window.speechSynthesis.cancel();
-    }
-  };
-
-  // --- 2. VOICE RECOGNITION ---
+  // --- 2. VOICE RECOGNITION (Listening) ---
   const handleListen = () => {
+    if (status === "listening") return; // Prevent double clicks
+
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
     if (!SpeechRecognition) {
       alert("Voice recognition is not supported in this browser. Please use Chrome.");
@@ -68,224 +51,165 @@ const Aisha = ({ user, onLogout }) => {
     const recognition = new SpeechRecognition();
     recognition.lang = 'en-US'; 
     recognition.continuous = false;
-    recognition.interimResults = false;
+    recognition.interimResults = true; // Show words as they are spoken
 
-    recognition.onstart = () => setIsListening(true);
-    recognition.onend = () => setIsListening(false);
-    
+    recognition.onstart = () => {
+      setStatus("listening");
+      setTranscript("");
+    };
+
     recognition.onresult = (event) => {
-      const transcript = event.results[0][0].transcript;
-      setInputText(transcript);
+      const current = event.resultIndex;
+      const transcriptText = event.results[current][0].transcript;
+      setTranscript(transcriptText);
+    };
+
+    recognition.onend = () => {
+      if (transcript) {
+        processCommand(transcript);
+      } else {
+        setStatus("idle");
+      }
     };
 
     recognition.start();
   };
 
-  // --- 3. THE BRAIN ---
-  const getAishaResponse = async (userText) => {
-    const lowerText = userText.toLowerCase();
+  // --- 3. THE BRAIN (Logic) ---
+  const processCommand = async (command) => {
+    setStatus("processing");
+    const lowerText = command.toLowerCase();
 
-    if (lowerText.includes("lost") && lowerText.includes("card")) {
-      return {
-        text: "Sorry to hear that. It’s quite unfortunate. Let me help you with that. Can you let me know when did you lose your card?",
-        status: "idle"
-      };
-    }
-    
-    if (lowerText.includes("yesterday") || lowerText.includes("day") || lowerText.includes("ago")) {
-      return {
-        text: `I shall register your request for a replacement card. You will be charged ${FEE_AMOUNT} for this. The charges will reflect in your maintenance bill next month. Shall I proceed with replacement?`,
-        status: "idle"
-      };
-    }
+    // Simulated Thinking Delay
+    setTimeout(() => {
+      let responseText = "";
+      let successTrigger = false;
 
-    if (lowerText.includes("yes") || lowerText.includes("sure") || lowerText.includes("go ahead") || lowerText.includes("please")) {
-      return {
-        text: "I have processed your request. You can see the details on your screen now.",
-        status: "complete"
-      };
-    }
+      // Logic Block
+      if (lowerText.includes("lost") && lowerText.includes("card")) {
+        responseText = "Sorry to hear that. It’s quite unfortunate. Let me help you with that. Can you let me know when did you lose your card?";
+      } 
+      else if (lowerText.includes("yesterday") || lowerText.includes("day") || lowerText.includes("ago")) {
+        responseText = `I shall register your request for a replacement card. You will be charged ${FEE_AMOUNT} for this. The charges will reflect in your maintenance bill next month. Shall I proceed?`;
+      } 
+      else if (lowerText.includes("yes") || lowerText.includes("sure") || lowerText.includes("go ahead")) {
+        responseText = "I have processed your request. You can see the details on your screen now.";
+        successTrigger = true;
+      } 
+      else {
+        responseText = "I am listening. Could you please clarify your request regarding your residence?";
+      }
 
-    return {
-      text: "I am listening. Could you please clarify your request regarding your residence?",
-      status: "idle"
-    };
-  };
-
-  const handleSendMessage = async (textOverride = null) => {
-    const textToSend = textOverride || inputText;
-    if (!textToSend.trim()) return;
-
-    const newMessages = [...messages, { sender: 'user', text: textToSend }];
-    setMessages(newMessages);
-    setInputText("");
-
-    setTimeout(async () => {
-      const response = await getAishaResponse(textToSend);
-      setMessages(prev => [...prev, { sender: 'aisha', text: response.text }]);
-      speak(response.text);
-      if (response.status === "complete") setRequestStatus("complete");
-    }, 800);
+      // Execute Response
+      speak(responseText);
+      if (successTrigger) setShowSuccessCard(true);
+    }, 1000);
   };
 
   // --- INITIALIZATION ---
   useEffect(() => {
-    const greeting = `Hello ${residentName}! I am Aisha, your Residence assistant. I am here exclusively to help you with your residence community needs. How can I help you today?`;
-    
-    // Add text to chat immediately
-    setMessages([{ sender: 'aisha', text: greeting }]);
-    
-    // Try to speak immediately (might be blocked by browser)
-    speak(greeting);
-
-    // Fallback: If voices weren't ready, try again in 500ms
-    const timer = setTimeout(() => {
-       if (window.speechSynthesis.speaking === false && isVoiceEnabled) {
-         speak(greeting);
-       }
-    }, 500);
-
-    return () => clearTimeout(timer);
+    const greeting = `Hello ${residentName}. I am Aisha. How can I help you today?`;
+    // Wait for voices to load
+    if (window.speechSynthesis.getVoices().length === 0) {
+      window.speechSynthesis.onvoiceschanged = () => speak(greeting);
+    } else {
+      setTimeout(() => speak(greeting), 500);
+    }
   }, [residentName]);
 
-  useEffect(() => {
-    chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages, requestStatus]);
+  // --- DYNAMIC STYLES FOR THE "JARVIS" ORB ---
+  const getOrbStyles = () => {
+    switch(status) {
+      case 'listening':
+        return "bg-red-500 shadow-[0_0_60px_rgba(239,68,68,0.6)] scale-110 animate-pulse";
+      case 'speaking':
+        return "bg-amber-400 shadow-[0_0_80px_rgba(251,191,36,0.6)] scale-105 animate-bounce-slow"; // Custom slow bounce
+      case 'processing':
+        return "bg-blue-500 shadow-[0_0_50px_rgba(59,130,246,0.6)] animate-spin";
+      default: // idle
+        return "bg-slate-700 shadow-[0_0_30px_rgba(51,65,85,0.4)] hover:scale-105";
+    }
+  };
 
-  // --- RENDER ---
   return (
-    <div className="flex flex-col h-screen bg-gray-50 items-center justify-center p-4 font-sans text-slate-800">
+    <div className="flex flex-col h-screen bg-slate-900 text-white font-sans overflow-hidden relative">
       
-      <div className="w-full max-w-md bg-white rounded-3xl shadow-2xl overflow-hidden border border-gray-200 flex flex-col h-[85vh]">
+      {/* BACKGROUND EFFECTS */}
+      <div className="absolute inset-0 bg-[radial-gradient(circle_at_center,_var(--tw-gradient-stops))] from-slate-800 via-slate-900 to-black z-0"></div>
+
+      {/* HEADER */}
+      <div className="relative z-10 p-6 flex justify-between items-center">
+        <div>
+          <h1 className="text-2xl font-light tracking-[0.2em] text-white/80">AISHA</h1>
+          <div className="flex items-center gap-2 mt-1">
+            <span className={`w-2 h-2 rounded-full ${status === 'idle' ? 'bg-slate-500' : 'bg-green-400 animate-pulse'}`}></span>
+            <span className="text-xs text-slate-400 uppercase tracking-widest">{status}</span>
+          </div>
+        </div>
         
-        {/* Header */}
-        <div className="bg-slate-900 p-5 flex items-center justify-between text-white shadow-md z-10">
-          <div>
-            <h1 className="font-semibold text-lg tracking-wide">Aisha</h1>
-            <p className="text-[10px] text-amber-400 uppercase tracking-wider">Emaar Residence Assistant</p>
-          </div>
+        <div className="flex gap-4">
+           <button onClick={() => setIsVoiceEnabled(!isVoiceEnabled)} className="text-white/50 hover:text-white transition">
+             {isVoiceEnabled ? <Volume2 size={20} /> : <VolumeX size={20} />}
+           </button>
+           <button onClick={onLogout} className="text-white/50 hover:text-red-400 transition">
+             <LogOut size={20} />
+           </button>
+        </div>
+      </div>
+
+      {/* MAIN INTERFACE */}
+      <div className="relative z-10 flex-1 flex flex-col items-center justify-center">
+        
+        {/* SUCCESS CARD OVERLAY */}
+        {showSuccessCard && (
+           <div className="absolute top-10 animate-in fade-in zoom-in duration-500 z-50">
+             <div className="bg-white/10 backdrop-blur-md border border-white/20 p-6 rounded-2xl w-80 text-center shadow-2xl">
+               <div className="w-12 h-12 bg-green-500 rounded-full flex items-center justify-center mx-auto mb-4 shadow-lg">
+                 <Sparkles className="text-white" />
+               </div>
+               <h3 className="text-xl font-semibold mb-1">Request Confirmed</h3>
+               <p className="text-sm text-white/70 mb-4">Access Card Replacement</p>
+               <div className="bg-black/20 rounded-lg p-3 mb-2">
+                 <p className="text-xs text-white/50 uppercase">Charge</p>
+                 <p className="text-lg font-bold text-amber-400">{FEE_AMOUNT}</p>
+               </div>
+               <p className="text-xs text-white/40">Added to next maintenance bill</p>
+             </div>
+           </div>
+        )}
+
+        {/* THE "JARVIS" ORB */}
+        <div className="relative mb-12 group">
+          {/* Outer Glow Rings */}
+          <div className={`absolute inset-0 rounded-full border border-white/10 scale-150 ${status === 'listening' ? 'animate-ping opacity-20' : 'opacity-0'}`}></div>
+          <div className={`absolute inset-0 rounded-full border border-white/5 scale-[2] ${status === 'speaking' ? 'animate-pulse opacity-20' : 'opacity-0'}`}></div>
           
-          <div className="flex items-center gap-2">
-            {/* Voice Toggle */}
-            <button 
-              onClick={toggleVoice}
-              className={`p-2 rounded-full transition-colors ${
-                isVoiceEnabled 
-                  ? 'bg-amber-500/20 text-amber-400 hover:bg-amber-500/30' 
-                  : 'bg-white/10 text-gray-400 hover:bg-white/20'
-              }`}
-              title={isVoiceEnabled ? "Mute Voice" : "Enable Voice"}
-            >
-              {isVoiceEnabled ? <Volume2 size={16} /> : <VolumeX size={16} />}
-            </button>
-
-            {/* Logout */}
-            <button 
-              onClick={onLogout}
-              className="flex items-center gap-1 text-xs bg-white/10 hover:bg-white/20 text-white px-3 py-1.5 rounded-full transition-colors"
-            >
-              <LogOut size={12} />
-              Logout
-            </button>
-          </div>
+          {/* Core Orb Button */}
+          <button 
+            onClick={handleListen}
+            className={`w-32 h-32 rounded-full flex items-center justify-center transition-all duration-500 ease-out ${getOrbStyles()}`}
+          >
+            {status === 'listening' ? (
+              <Mic size={40} className="text-white animate-pulse" />
+            ) : status === 'processing' ? (
+              <Sparkles size={40} className="text-white animate-spin-slow" />
+            ) : (
+              <Mic size={40} className="text-white/80" />
+            )}
+          </button>
         </div>
 
-        {/* Chat Area */}
-        <div className="flex-1 overflow-y-auto p-4 space-y-6 bg-slate-50 scroll-smooth">
-          {messages.map((msg, idx) => (
-            <div key={idx} className={`flex ${msg.sender === 'user' ? 'justify-end' : 'justify-start'} animate-in fade-in slide-in-from-bottom-2 duration-300`}>
-              <div 
-                className={`max-w-[85%] p-4 rounded-2xl text-sm shadow-sm leading-relaxed ${
-                  msg.sender === 'user' 
-                    ? 'bg-slate-800 text-white rounded-tr-sm' 
-                    : 'bg-white text-slate-700 border border-gray-100 rounded-tl-sm'
-                }`}
-              >
-                {msg.text}
-              </div>
-            </div>
-          ))}
-          
-          {/* Success Card */}
-          {requestStatus === "complete" && (
-            <div className="animate-in zoom-in duration-500 mt-6 mb-2 mx-2">
-              <div className="bg-white border border-green-100 shadow-xl rounded-2xl overflow-hidden">
-                <div className="bg-green-50 p-3 border-b border-green-100 flex items-center gap-2">
-                   <div className="bg-green-100 p-1 rounded-full">
-                     <Sparkles size={16} className="text-green-600" />
-                   </div>
-                   <h3 className="font-bold text-green-800 text-sm">Request Successful</h3>
-                </div>
-                
-                <div className="p-4 space-y-3">
-                  <div className="flex justify-between items-center text-xs text-gray-500">
-                    <span>Request ID</span>
-                    <span className="font-mono">#EMR-8821</span>
-                  </div>
-                  <hr className="border-gray-100" />
-                  <div className="space-y-2 text-sm">
-                    <div className="flex justify-between">
-                      <span className="text-gray-500">Resident</span>
-                      <span className="font-semibold text-slate-800">{residentName}</span>
-                    </div>
-                    <div className="flex justify-between">
-                      <span className="text-gray-500">Time</span>
-                      <span className="font-semibold text-slate-800">{new Date().toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}</span>
-                    </div>
-                    <div className="flex justify-between">
-                      <span className="text-gray-500">Service</span>
-                      <span className="font-semibold text-slate-800">Access Card Replacement</span>
-                    </div>
-                  </div>
-                  <div className="bg-slate-50 p-3 rounded-lg border border-slate-100 mt-2 flex justify-between items-center">
-                    <span className="text-xs font-medium text-slate-500">Applicable Charges</span>
-                    <span className="font-bold text-amber-600">{FEE_AMOUNT}</span>
-                  </div>
-                </div>
-              </div>
-            </div>
-          )}
-          <div ref={chatEndRef} />
+        {/* TEXT FEEDBACK */}
+        <div className="h-24 text-center px-4 max-w-lg">
+           {status === 'listening' ? (
+             <p className="text-2xl font-light text-white/90 animate-pulse">"{transcript}"</p>
+           ) : status === 'speaking' ? (
+             <p className="text-xl text-amber-200/90 font-medium leading-relaxed">{lastResponse}</p>
+           ) : (
+             <p className="text-sm text-white/30 uppercase tracking-widest">Tap the Orb to Speak</p>
+           )}
         </div>
 
-        {/* Input Area */}
-        <div className="p-4 bg-white border-t border-slate-100">
-          <div className="flex gap-2 items-center">
-            <button 
-              onClick={handleListen}
-              className={`p-3 rounded-full transition-all duration-300 ${
-                isListening 
-                  ? 'bg-red-500 text-white shadow-lg ring-4 ring-red-200 scale-110' 
-                  : 'bg-slate-100 text-slate-500 hover:bg-slate-200'
-              }`}
-            >
-              <Mic size={20} className={isListening ? "animate-pulse" : ""} />
-            </button>
-            
-            <div className="flex-1 relative">
-              <input 
-                type="text" 
-                value={inputText}
-                onChange={(e) => setInputText(e.target.value)}
-                placeholder={isListening ? "Listening..." : "Type or speak..."}
-                className="w-full bg-slate-50 border border-slate-200 rounded-full py-3 px-5 text-sm focus:outline-none focus:ring-2 focus:ring-amber-400 focus:border-transparent transition-all"
-                onKeyPress={(e) => e.key === 'Enter' && handleSendMessage()}
-              />
-            </div>
-            
-            <button 
-              onClick={() => handleSendMessage()}
-              disabled={!inputText.trim()}
-              className={`p-3 rounded-full transition-all duration-200 ${
-                inputText.trim() 
-                  ? 'bg-slate-900 text-white shadow-md hover:bg-slate-800 transform hover:-translate-y-1' 
-                  : 'bg-slate-100 text-slate-300 cursor-not-allowed'
-              }`}
-            >
-              <Send size={18} />
-            </button>
-          </div>
-        </div>
       </div>
     </div>
   );
