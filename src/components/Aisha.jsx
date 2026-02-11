@@ -1,19 +1,16 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Mic, MicOff, Volume2, VolumeX, LogOut, Activity } from 'lucide-react';
+import { Mic, MicOff, Volume2, VolumeX, LogOut, Activity, Sparkles } from 'lucide-react';
 
-// --- CONFIGURATION ---
-const RESIDENT_NAME = "John";
 const FEE_AMOUNT = "250 AED";
 
 const Aisha = ({ user, onLogout }) => {
-  // State: 'idle', 'listening', 'processing', 'speaking'
-  const [mode, setMode] = useState("idle"); 
+  const [mode, setMode] = useState("idle"); // idle, listening, processing, speaking
   const [transcript, setTranscript] = useState("");
   const [response, setResponse] = useState("");
   const [isVoiceEnabled, setIsVoiceEnabled] = useState(true);
+  const [showSuccessCard, setShowSuccessCard] = useState(false);
   
-  // Refs for animation management
-  const processingTimeout = useRef(null);
+  const residentName = user?.name || "Resident";
 
   // --- 1. VOICE OUTPUT (Aisha Speaking) ---
   const speak = (text) => {
@@ -25,12 +22,11 @@ const Aisha = ({ user, onLogout }) => {
 
     const utterance = new SpeechSynthesisUtterance(text);
     const voices = window.speechSynthesis.getVoices();
-    // Prefer a "Google US English" or premium voice
-    const femaleVoice = voices.find(v => v.name.includes('Google US English') || v.name.includes('Female'));
-    if (femaleVoice) utterance.voice = femaleVoice;
+    const femaleVoice = voices.find(v => v.name.includes('Google US English') || v.name.includes('Samantha') || v.name.includes('Female'));
     
+    if (femaleVoice) utterance.voice = femaleVoice;
+    utterance.lang = 'en-US'; 
     utterance.rate = 1.0;
-    utterance.pitch = 1.0;
 
     utterance.onend = () => {
       setMode("idle");
@@ -39,99 +35,91 @@ const Aisha = ({ user, onLogout }) => {
     window.speechSynthesis.speak(utterance);
   };
 
-  // --- 2. VOICE INPUT (User Speaking) ---
+  // --- 2. THE BRAIN (The Fix is Here) ---
+  const runLogic = (finalText) => {
+    setMode("processing");
+    const lowerText = finalText.toLowerCase();
+
+    // Small delay to simulate "Thinking" visual
+    setTimeout(() => {
+      // Logic Step 1: Lost Card
+      if (lowerText.includes("lost") || lowerText.includes("card") || lowerText.includes("access")) {
+        speak("Sorry to hear that. It’s quite unfortunate. Let me help you with that. Can you let me know when did you lose your card?");
+      } 
+      // Logic Step 2: Date (Improved matching)
+      else if (lowerText.includes("yesterday") || lowerText.includes("day") || lowerText.includes("ago") || lowerText.includes("last week")) {
+        speak(`I shall register your request for a replacement card. You will be charged ${FEE_AMOUNT} for this. The charges will reflect in your maintenance bill next month. Shall I proceed?`);
+      } 
+      // Logic Step 3: Confirmation
+      else if (lowerText.includes("yes") || lowerText.includes("sure") || lowerText.includes("go ahead") || lowerText.includes("please")) {
+        speak("I have processed your request. You can see the details on your screen now.");
+        setShowSuccessCard(true);
+      } 
+      // Fallback
+      else {
+        speak("I'm sorry, I didn't quite catch that. Could you please repeat your request regarding your residence?");
+      }
+    }, 1000);
+  };
+
+  // --- 3. VOICE INPUT (User Speaking) ---
   const handleListen = () => {
     if (mode === "listening" || mode === "speaking") {
-      // Tap to stop
       window.speechSynthesis.cancel();
       setMode("idle");
       return;
     }
 
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-    if (!SpeechRecognition) return alert("Browser not supported. Use Chrome.");
+    if (!SpeechRecognition) return alert("Chrome is required for voice features.");
 
     const recognition = new SpeechRecognition();
-    recognition.lang = 'en-US'; 
-    recognition.continuous = false;
+    recognition.lang = 'en-US';
     recognition.interimResults = true;
 
     recognition.onstart = () => {
       setMode("listening");
       setTranscript("");
+      setShowSuccessCard(false); // Reset UI card on new interaction
     };
 
     recognition.onresult = (event) => {
-      const current = event.resultIndex;
-      const text = event.results[current][0].transcript;
+      const text = event.results[0][0].transcript;
       setTranscript(text);
     };
 
     recognition.onend = () => {
-      // If we caught text, process it. Otherwise go idle.
-      // We read the 'transcript' state carefully here or use the event.
-      // For simplicity in this demo, we assume the state updated or we process immediately.
-      setMode("processing");
-      // Artificial delay to show the "Thinking" animation
-      processingTimeout.current = setTimeout(() => {
-        runLogic();
-      }, 1500); 
+      // CRITICAL: We use a local variable to capture the final transcript 
+      // because state updates are asynchronous.
+      setTranscript((finalText) => {
+        if (finalText.trim().length > 0) {
+          runLogic(finalText);
+        } else {
+          setMode("idle");
+        }
+        return finalText;
+      });
     };
 
     recognition.start();
   };
 
-  // --- 3. LOGIC BRAIN ---
-  // Note: In a real app, 'transcript' would be passed in directly to avoid stale state issues.
-  // Here we use a simplified simulation based on your script.
-  const runLogic = () => {
-    // This logic runs AFTER the "Processing" delay
-    // We are simulating the "Intent Understanding" phase
-    
-    // Check what was arguably just spoken (using a ref or simple logic check for demo)
-    // For this prototype, we cycle responses based on simulated flow or keywords if accessible.
-    // Ideally, we'd pass the actual transcript string here.
-    
-    const lowerText = transcript.toLowerCase() || "test"; 
-
-    if (lowerText.includes("lost") || lowerText.includes("card")) {
-      speak("Sorry to hear that. It’s quite unfortunate. Let me help you with that. Can you let me know when did you lose your card?");
-    } 
-    else if (lowerText.includes("yesterday") || lowerText.includes("day")) {
-      speak(`I shall register your request for a replacement card. You will be charged ${FEE_AMOUNT} for this. The charges will reflect in your maintenance bill next month. Shall I proceed?`);
-    } 
-    else if (lowerText.includes("yes") || lowerText.includes("sure")) {
-      speak("I have processed your request. You can see the details on your screen now.");
-    } 
-    else {
-      // Default / Fallback
-      speak("I am currently tuned to assist with Access Cards. Could you please clarify?");
-    }
-  };
-
-  // Initial Greeting
   useEffect(() => {
-    // Wait for voices to load
     const initVoice = () => {
-       const greeting = `Hello ${RESIDENT_NAME || "Resident"}. I am Aisha. How can I help you today?`;
-       speak(greeting);
+       speak(`Hello ${residentName}. I am Aisha. How can I help you today?`);
     };
-    
     if (window.speechSynthesis.getVoices().length > 0) {
       setTimeout(initVoice, 800);
     } else {
       window.speechSynthesis.onvoiceschanged = initVoice;
     }
-  }, []);
-
-
-  // --- VISUAL RENDERERS ---
+  }, [residentName]);
 
   return (
     <div className="relative w-full h-screen bg-black overflow-hidden flex flex-col items-center justify-center font-sans text-white select-none">
       
-      {/* 1. BACKGROUND GRID (Futuristic Floor) */}
-      <div className="absolute inset-0 z-0 opacity-20 pointer-events-none" 
+      {/* 1. BACKGROUND GRID */}
+      <div className="absolute inset-0 z-0 opacity-20" 
            style={{ 
              backgroundImage: 'linear-gradient(rgba(0, 255, 255, 0.1) 1px, transparent 1px), linear-gradient(90deg, rgba(0, 255, 255, 0.1) 1px, transparent 1px)', 
              backgroundSize: '40px 40px',
@@ -142,102 +130,92 @@ const Aisha = ({ user, onLogout }) => {
       {/* 2. MAIN REACTOR CORE */}
       <div className="relative z-10 flex items-center justify-center">
         
-        {/* --- STATE: IDLE (Breathing) --- */}
-        {mode === 'idle' && (
-          <div className="absolute inset-0 flex items-center justify-center">
-            <div className="w-64 h-64 rounded-full border border-slate-700 opacity-50 animate-[spin_10s_linear_infinite]"></div>
-            <div className="absolute w-60 h-60 rounded-full border border-slate-600 opacity-30 animate-[spin_15s_linear_infinite_reverse]"></div>
-          </div>
-        )}
-
-        {/* --- STATE: LISTENING (User Speaking - CYAN/BLUE) --- */}
+        {/* State Visuals */}
         {mode === 'listening' && (
-          <>
-            {/* Outward Ripples */}
-            <div className="absolute w-full h-full animate-[ping_1.5s_ease-out_infinite] border-2 border-cyan-500 rounded-full opacity-50 scale-150"></div>
-            <div className="absolute w-full h-full animate-[ping_1.5s_ease-out_infinite_delay-300] border border-cyan-400 rounded-full opacity-30 scale-125"></div>
-            {/* Spinning Rings */}
-            <div className="absolute w-72 h-72 border-t-2 border-b-2 border-cyan-500 rounded-full animate-[spin_2s_linear_infinite]"></div>
-            <div className="absolute w-64 h-64 border-l-2 border-r-2 border-cyan-300 rounded-full animate-[spin_3s_linear_infinite_reverse]"></div>
-          </>
+          <div className="absolute w-80 h-80 animate-[ping_1.5s_ease-out_infinite] border-2 border-cyan-500 rounded-full opacity-40 scale-150"></div>
         )}
 
-        {/* --- STATE: SPEAKING (Aisha - GOLD/AMBER) --- */}
         {mode === 'speaking' && (
-          <>
-            {/* Solar Flare Pulses */}
-            <div className="absolute w-full h-full bg-amber-500 blur-3xl opacity-20 animate-pulse"></div>
-            <div className="absolute w-72 h-72 border-4 border-amber-500/50 rounded-full animate-[spin_1s_linear_infinite] border-dashed"></div>
-            <div className="absolute w-60 h-60 border-2 border-amber-300 rounded-full animate-[spin_4s_linear_infinite_reverse]"></div>
-            {/* Particles (CSS dots) */}
-            <div className="absolute top-0 w-2 h-2 bg-amber-400 rounded-full animate-bounce"></div>
-            <div className="absolute bottom-0 w-2 h-2 bg-amber-400 rounded-full animate-bounce"></div>
-          </>
+          <div className="absolute w-full h-full bg-amber-500 blur-[100px] opacity-20 animate-pulse"></div>
         )}
 
-        {/* --- STATE: PROCESSING (Loading) --- */}
-        {mode === 'processing' && (
-           <div className="absolute w-72 h-72 border-t-4 border-white rounded-full animate-spin"></div>
-        )}
+        {/* Orbiting Rings */}
+        <div className={`absolute w-72 h-72 border-2 rounded-full transition-all duration-700 ${mode === 'speaking' ? 'border-amber-500 animate-[spin_2s_linear_infinite]' : 'border-slate-800 animate-[spin_10s_linear_infinite]'}`}></div>
+        <div className={`absolute w-60 h-60 border border-dashed rounded-full transition-all duration-700 ${mode === 'listening' ? 'border-cyan-400 animate-[spin_3s_linear_infinite_reverse]' : 'border-slate-700 animate-[spin_15s_linear_infinite_reverse]'}`}></div>
 
-
-        {/* --- THE CORE BUTTON --- */}
+        {/* The Core Button */}
         <button 
           onClick={handleListen}
           className={`relative z-20 w-40 h-40 rounded-full flex items-center justify-center transition-all duration-500 
-            ${mode === 'listening' ? 'bg-cyan-950 shadow-[0_0_50px_cyan]' : ''}
-            ${mode === 'speaking' ? 'bg-amber-950 shadow-[0_0_60px_orange]' : ''}
-            ${mode === 'idle' ? 'bg-slate-900 shadow-[0_0_30px_rgba(255,255,255,0.1)] hover:bg-slate-800' : ''}
-            ${mode === 'processing' ? 'bg-slate-950 scale-90' : ''}
+            ${mode === 'listening' ? 'bg-cyan-950 shadow-[0_0_60px_cyan] border-cyan-400 border-2' : ''}
+            ${mode === 'speaking' ? 'bg-amber-950 shadow-[0_0_80px_orange] border-amber-400 border-2' : ''}
+            ${mode === 'idle' ? 'bg-slate-900 border-slate-700 border hover:bg-slate-800 shadow-[0_0_20px_rgba(255,255,255,0.05)]' : ''}
+            ${mode === 'processing' ? 'bg-black scale-90' : ''}
           `}
         >
           {mode === 'listening' && <Mic size={48} className="text-cyan-400 animate-pulse" />}
           {mode === 'speaking' && <Activity size={48} className="text-amber-400 animate-bounce" />}
-          {mode === 'processing' && <span className="text-xs tracking-widest uppercase animate-pulse">Processing</span>}
+          {mode === 'processing' && <Sparkles size={40} className="text-white animate-spin" />}
           {mode === 'idle' && <Mic size={40} className="text-slate-500" />}
         </button>
-
       </div>
 
-      {/* 3. TEXT TRANSCRIPTS (HUD Style) */}
-      <div className="absolute bottom-20 w-full max-w-2xl px-6 text-center space-y-4">
-         
-         {/* User Text */}
-         <div className={`transition-all duration-500 ${mode === 'listening' ? 'opacity-100 translate-y-0' : 'opacity-40 translate-y-2'}`}>
-            <p className="text-cyan-300 font-mono text-lg tracking-wide">
-              {transcript || (mode === 'listening' ? "LISTENING..." : "")}
-            </p>
-         </div>
+      {/* 3. SUCCESS CARD (Generative UI Over the core) */}
+      {showSuccessCard && (
+        <div className="absolute top-20 z-50 animate-in fade-in zoom-in slide-in-from-top-4 duration-500">
+          <div className="bg-white/10 backdrop-blur-xl border border-white/20 p-6 rounded-3xl w-80 shadow-[0_20px_50px_rgba(0,0,0,0.5)]">
+             <div className="bg-green-500 w-10 h-10 rounded-full flex items-center justify-center mb-4 mx-auto shadow-lg shadow-green-500/50">
+                <Sparkles size={20} className="text-white" />
+             </div>
+             <h3 className="text-center font-bold text-lg text-white mb-4 uppercase tracking-tighter">Request Finalized</h3>
+             <div className="space-y-3 text-sm text-white/80">
+                <div className="flex justify-between border-b border-white/10 pb-2">
+                   <span>Service</span>
+                   <span className="text-white font-medium">Access Card</span>
+                </div>
+                <div className="flex justify-between border-b border-white/10 pb-2">
+                   <span>Fee</span>
+                   <span className="text-amber-400 font-bold">{FEE_AMOUNT}</span>
+                </div>
+                <div className="flex justify-between">
+                   <span>Ref ID</span>
+                   <span className="font-mono text-[10px]">#EMR-{Math.floor(Math.random()*90000)}</span>
+                </div>
+             </div>
+          </div>
+        </div>
+      )}
 
-         {/* Aisha Text */}
-         <div className={`transition-all duration-500 ${mode === 'speaking' ? 'opacity-100 scale-100' : 'opacity-0 scale-95'}`}>
-            <p className="text-amber-100 font-light text-xl leading-relaxed drop-shadow-lg">
-              "{response}"
-            </p>
-         </div>
+      {/* 4. HUD TEXT (Bottom) */}
+      <div className="absolute bottom-16 w-full max-w-xl text-center px-8 pointer-events-none">
+        <div className={`transition-all duration-300 ${mode === 'listening' ? 'opacity-100 scale-100' : 'opacity-40 scale-95'}`}>
+          <p className="text-cyan-400 font-mono text-lg lowercase">
+            {transcript || (mode === 'listening' ? "Detecting audio..." : "")}
+          </p>
+        </div>
+        <div className={`mt-4 transition-all duration-500 ${mode === 'speaking' ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-4'}`}>
+          <p className="text-amber-100 font-light text-xl italic leading-relaxed drop-shadow-md">
+            "{response}"
+          </p>
+        </div>
       </div>
 
-      {/* 4. HEADER CONTROLS */}
-      <div className="absolute top-0 left-0 w-full p-6 flex justify-between items-center z-50">
-         <div className="flex items-center gap-3">
-            <div className="w-8 h-8 rounded-full bg-gradient-to-tr from-amber-400 to-amber-600 flex items-center justify-center font-bold text-black text-xs">AI</div>
-            <span className="font-light tracking-[0.3em] text-white/50 text-sm">SYSTEM ONLINE</span>
-         </div>
-
-         <div className="flex gap-4">
-            <button 
-              onClick={() => setIsVoiceEnabled(!isVoiceEnabled)}
-              className="w-10 h-10 rounded-full border border-white/10 flex items-center justify-center hover:bg-white/10 transition"
-            >
-              {isVoiceEnabled ? <Volume2 size={16} /> : <VolumeX size={16} />}
-            </button>
-            <button 
-              onClick={onLogout}
-              className="w-10 h-10 rounded-full border border-white/10 flex items-center justify-center hover:bg-red-500/20 hover:border-red-500/50 hover:text-red-400 transition"
-            >
-              <LogOut size={16} />
-            </button>
-         </div>
+      {/* 5. TOP HUD */}
+      <div className="absolute top-0 w-full p-8 flex justify-between items-start z-50">
+        <div className="space-y-1">
+          <h2 className="text-white/40 text-[10px] tracking-[0.4em] uppercase font-bold">Residency System V4.0</h2>
+          <div className="h-[1px] w-24 bg-gradient-to-r from-amber-500 to-transparent"></div>
+          <p className="text-amber-500 text-xs font-mono tracking-widest">{residentName.toUpperCase()}</p>
+        </div>
+        
+        <div className="flex gap-4">
+          <button onClick={() => setIsVoiceEnabled(!isVoiceEnabled)} className="w-12 h-12 rounded-xl bg-white/5 border border-white/10 flex items-center justify-center hover:bg-white/10 transition">
+            {isVoiceEnabled ? <Volume2 size={20} className="text-amber-400" /> : <VolumeX size={20} className="text-red-400" />}
+          </button>
+          <button onClick={onLogout} className="w-12 h-12 rounded-xl bg-white/5 border border-white/10 flex items-center justify-center hover:bg-red-500/20 hover:border-red-500/50 transition">
+            <LogOut size={20} className="text-white/60" />
+          </button>
+        </div>
       </div>
 
     </div>
