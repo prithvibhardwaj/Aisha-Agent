@@ -1,6 +1,11 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Mic, MicOff, Volume2, VolumeX, LogOut, Activity, Sparkles } from 'lucide-react';
+import { Mic, Volume2, VolumeX, LogOut, Activity, Sparkles, AlertCircle } from 'lucide-react';
 
+// --- CONFIGURATION ---
+// ⚠️ PASTE YOUR API KEY HERE
+const API_KEY = import.meta.env.VITE_GEMINI_API_KEY;
+
+const RESIDENT_NAME = "John";
 const FEE_AMOUNT = "250 AED";
 
 const Aisha = ({ user, onLogout }) => {
@@ -9,10 +14,11 @@ const Aisha = ({ user, onLogout }) => {
   const [response, setResponse] = useState("");
   const [isVoiceEnabled, setIsVoiceEnabled] = useState(true);
   const [showSuccessCard, setShowSuccessCard] = useState(false);
+  const [conversation, setConversation] = useState([]); // Short-term memory
   
   const residentName = user?.name || "Resident";
 
-  // --- 1. VOICE OUTPUT (Aisha Speaking) ---
+  // --- 1. VOICE OUTPUT ---
   const speak = (text) => {
     if (!isVoiceEnabled || !window.speechSynthesis) return;
     
@@ -28,41 +34,66 @@ const Aisha = ({ user, onLogout }) => {
     utterance.lang = 'en-US'; 
     utterance.rate = 1.0;
 
-    utterance.onend = () => {
-      setMode("idle");
-    };
-
+    utterance.onend = () => setMode("idle");
     window.speechSynthesis.speak(utterance);
   };
 
-  // --- 2. THE BRAIN (The Fix is Here) ---
-  const runLogic = (finalText) => {
+  // --- 2. THE REAL BRAIN (Gemini API) ---
+  const callGemini = async (userText) => {
     setMode("processing");
-    const lowerText = finalText.toLowerCase();
 
-    // Small delay to simulate "Thinking" visual
-    setTimeout(() => {
-      // Logic Step 1: Lost Card
-      if (lowerText.includes("lost") || lowerText.includes("card") || lowerText.includes("access")) {
-        speak("Sorry to hear that. It’s quite unfortunate. Let me help you with that. Can you let me know when did you lose your card?");
-      } 
-      // Logic Step 2: Date (Improved matching)
-      else if (lowerText.includes("yesterday") || lowerText.includes("day") || lowerText.includes("ago") || lowerText.includes("last week")) {
-        speak(`I shall register your request for a replacement card. You will be charged ${FEE_AMOUNT} for this. The charges will reflect in your maintenance bill next month. Shall I proceed?`);
-      } 
-      // Logic Step 3: Confirmation
-      else if (lowerText.includes("yes") || lowerText.includes("sure") || lowerText.includes("go ahead") || lowerText.includes("please")) {
-        speak("I have processed your request. You can see the details on your screen now.");
+    // 1. Build the context for the AI
+    // We give it a "Persona" and the history of what was just said.
+    const systemPrompt = `
+      You are Aisha, a high-end Residence Assistant for Emaar.
+      Your tone is professional, warm, and concise.
+      
+      User Name: ${residentName}
+      Current Fee for Lost Card: ${FEE_AMOUNT}
+      
+      PROTOCOL:
+      1. If user says they lost a card, express sympathy and ask WHEN they lost it.
+      2. If they give a time (any time, like "yesterday", "2 days ago", "last week"), tell them the replacement cost (${FEE_AMOUNT}) will be added to their bill and ask to proceed.
+      3. If they confirm (yes/sure/go ahead), say "Request confirmed" and output the exact secret tag: [ACTION:CONFIRM_CARD].
+      4. Keep responses short (under 2 sentences) so they are easy to speak.
+    `;
+
+    // 2. Prepare the message history for the API
+    const historyText = conversation.map(c => `${c.role}: ${c.text}`).join("\n");
+    const fullPrompt = `${systemPrompt}\n\nCONVERSATION HISTORY:\n${historyText}\nUser: ${userText}\nAisha:`;
+
+    try {
+      // 3. Call the API
+      const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${API_KEY}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          contents: [{ parts: [{ text: fullPrompt }] }]
+        })
+      });
+
+      const data = await response.json();
+      const aiText = data.candidates[0].content.parts[0].text;
+
+      // 4. Handle "Secret Actions" (The UI Trigger)
+      let finalSpeech = aiText;
+      if (aiText.includes("[ACTION:CONFIRM_CARD]")) {
         setShowSuccessCard(true);
-      } 
-      // Fallback
-      else {
-        speak("I'm sorry, I didn't quite catch that. Could you please repeat your request regarding your residence?");
+        finalSpeech = aiText.replace("[ACTION:CONFIRM_CARD]", "").trim();
       }
-    }, 1000);
+
+      // 5. Update Memory & Speak
+      setConversation(prev => [...prev, { role: "User", text: userText }, { role: "Aisha", text: finalSpeech }]);
+      speak(finalSpeech);
+
+    } catch (error) {
+      console.error("AI Error:", error);
+      speak("I am having trouble connecting to the residence server. Please try again.");
+      setMode("idle");
+    }
   };
 
-  // --- 3. VOICE INPUT (User Speaking) ---
+  // --- 3. VOICE INPUT ---
   const handleListen = () => {
     if (mode === "listening" || mode === "speaking") {
       window.speechSynthesis.cancel();
@@ -71,7 +102,7 @@ const Aisha = ({ user, onLogout }) => {
     }
 
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-    if (!SpeechRecognition) return alert("Chrome is required for voice features.");
+    if (!SpeechRecognition) return alert("Chrome is required for voice.");
 
     const recognition = new SpeechRecognition();
     recognition.lang = 'en-US';
@@ -80,38 +111,38 @@ const Aisha = ({ user, onLogout }) => {
     recognition.onstart = () => {
       setMode("listening");
       setTranscript("");
-      setShowSuccessCard(false); // Reset UI card on new interaction
     };
 
     recognition.onresult = (event) => {
-      const text = event.results[0][0].transcript;
-      setTranscript(text);
+      setTranscript(event.results[0][0].transcript);
     };
 
     recognition.onend = () => {
-      // CRITICAL: We use a local variable to capture the final transcript 
-      // because state updates are asynchronous.
-      setTranscript((finalText) => {
-        if (finalText.trim().length > 0) {
-          runLogic(finalText);
+      // Use a timeout to ensure we capture the final state
+      setTranscript(currentText => {
+        if (currentText.trim()) {
+          callGemini(currentText); // <--- CALLING THE API HERE
         } else {
           setMode("idle");
         }
-        return finalText;
+        return currentText;
       });
     };
 
     recognition.start();
   };
 
+  // --- INIT ---
   useEffect(() => {
-    const initVoice = () => {
-       speak(`Hello ${residentName}. I am Aisha. How can I help you today?`);
-    };
+    const greeting = `Hello ${residentName}. I am Aisha. How can I help you?`;
+    // Add greeting to memory so AI knows it happened
+    setConversation([{ role: "Aisha", text: greeting }]);
+    
+    // Wait for voices
     if (window.speechSynthesis.getVoices().length > 0) {
-      setTimeout(initVoice, 800);
+      setTimeout(() => speak(greeting), 800);
     } else {
-      window.speechSynthesis.onvoiceschanged = initVoice;
+      window.speechSynthesis.onvoiceschanged = () => speak(greeting);
     }
   }, [residentName]);
 
@@ -129,21 +160,12 @@ const Aisha = ({ user, onLogout }) => {
 
       {/* 2. MAIN REACTOR CORE */}
       <div className="relative z-10 flex items-center justify-center">
-        
-        {/* State Visuals */}
-        {mode === 'listening' && (
-          <div className="absolute w-80 h-80 animate-[ping_1.5s_ease-out_infinite] border-2 border-cyan-500 rounded-full opacity-40 scale-150"></div>
-        )}
+        {mode === 'listening' && <div className="absolute w-80 h-80 animate-[ping_1.5s_ease-out_infinite] border-2 border-cyan-500 rounded-full opacity-40 scale-150"></div>}
+        {mode === 'speaking' && <div className="absolute w-full h-full bg-amber-500 blur-[100px] opacity-20 animate-pulse"></div>}
 
-        {mode === 'speaking' && (
-          <div className="absolute w-full h-full bg-amber-500 blur-[100px] opacity-20 animate-pulse"></div>
-        )}
-
-        {/* Orbiting Rings */}
         <div className={`absolute w-72 h-72 border-2 rounded-full transition-all duration-700 ${mode === 'speaking' ? 'border-amber-500 animate-[spin_2s_linear_infinite]' : 'border-slate-800 animate-[spin_10s_linear_infinite]'}`}></div>
         <div className={`absolute w-60 h-60 border border-dashed rounded-full transition-all duration-700 ${mode === 'listening' ? 'border-cyan-400 animate-[spin_3s_linear_infinite_reverse]' : 'border-slate-700 animate-[spin_15s_linear_infinite_reverse]'}`}></div>
 
-        {/* The Core Button */}
         <button 
           onClick={handleListen}
           className={`relative z-20 w-40 h-40 rounded-full flex items-center justify-center transition-all duration-500 
@@ -160,7 +182,7 @@ const Aisha = ({ user, onLogout }) => {
         </button>
       </div>
 
-      {/* 3. SUCCESS CARD (Generative UI Over the core) */}
+      {/* 3. SUCCESS CARD */}
       {showSuccessCard && (
         <div className="absolute top-20 z-50 animate-in fade-in zoom-in slide-in-from-top-4 duration-500">
           <div className="bg-white/10 backdrop-blur-xl border border-white/20 p-6 rounded-3xl w-80 shadow-[0_20px_50px_rgba(0,0,0,0.5)]">
@@ -186,7 +208,7 @@ const Aisha = ({ user, onLogout }) => {
         </div>
       )}
 
-      {/* 4. HUD TEXT (Bottom) */}
+      {/* 4. HUD TEXT */}
       <div className="absolute bottom-16 w-full max-w-xl text-center px-8 pointer-events-none">
         <div className={`transition-all duration-300 ${mode === 'listening' ? 'opacity-100 scale-100' : 'opacity-40 scale-95'}`}>
           <p className="text-cyan-400 font-mono text-lg lowercase">
@@ -217,7 +239,15 @@ const Aisha = ({ user, onLogout }) => {
           </button>
         </div>
       </div>
-
+      
+      {/* 6. NO API KEY WARNING */}
+      {API_KEY === "AIzaSyBzy1XFtjxVi0FAhRJkQ0goEmF7Vy3TIWk" && (
+        <div className="absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 bg-red-500/90 text-white p-6 rounded-xl shadow-2xl z-[100] text-center w-80">
+          <AlertCircle size={40} className="mx-auto mb-4" />
+          <h3 className="font-bold text-lg mb-2">API Key Missing</h3>
+          <p className="text-sm">Please open Aisha.jsx and paste your Gemini API Key in line 6 to enable the AI brain.</p>
+        </div>
+      )}
     </div>
   );
 };
