@@ -2,7 +2,6 @@ import React, { useState, useEffect, useRef } from 'react';
 import { Mic, Volume2, VolumeX, LogOut, Activity, Sparkles, AlertCircle } from 'lucide-react';
 
 // --- CONFIGURATION ---
-// ⚠️ PASTE YOUR API KEY HERE
 const API_KEY = import.meta.env.VITE_GEMINI_API_KEY;
 
 const RESIDENT_NAME = "John";
@@ -241,11 +240,11 @@ const Aisha = ({ user, onLogout }) => {
       </div>
       
       {/* 6. NO API KEY WARNING */}
-      {API_KEY === "AIzaSyBzy1XFtjxVi0FAhRJkQ0goEmF7Vy3TIWk" && (
+      {(!API_KEY) && (
         <div className="absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 bg-red-500/90 text-white p-6 rounded-xl shadow-2xl z-[100] text-center w-80">
           <AlertCircle size={40} className="mx-auto mb-4" />
           <h3 className="font-bold text-lg mb-2">API Key Missing</h3>
-          <p className="text-sm">Please open Aisha.jsx and paste your Gemini API Key in line 6 to enable the AI brain.</p>
+          <p className="text-sm">Please check your .env file and restart the server.</p>
         </div>
       )}
     </div>
