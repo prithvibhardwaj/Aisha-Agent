@@ -1,10 +1,9 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Mic, Volume2, VolumeX, LogOut, Activity, Sparkles, AlertCircle } from 'lucide-react';
 
 // --- CONFIGURATION ---
-const API_KEY = import.meta.env.VITE_GEMINI_API_KEY;
-
-const RESIDENT_NAME = "John";
+const API_KEY = import.meta.env.VITE_GEMINI_API_KEY || "";
+const RESIDENT_NAME = "Prithvi";
 const FEE_AMOUNT = "250 AED";
 
 const Aisha = ({ user, onLogout }) => {
@@ -13,13 +12,18 @@ const Aisha = ({ user, onLogout }) => {
   const [response, setResponse] = useState("");
   const [isVoiceEnabled, setIsVoiceEnabled] = useState(true);
   const [showSuccessCard, setShowSuccessCard] = useState(false);
-  const [conversation, setConversation] = useState([]); // Short-term memory
+  const [conversation, setConversation] = useState([]); 
+  const [errorMessage, setErrorMessage] = useState(""); // NEW: Live Error Tracking
   
-  const residentName = user?.name || "Resident";
+  const residentName = user?.name || RESIDENT_NAME;
 
   // --- 1. VOICE OUTPUT ---
-  const speak = (text) => {
-    if (!isVoiceEnabled || !window.speechSynthesis) return;
+  // Added "autoListenAfter" parameter to trigger the mic when she stops talking
+  const speak = (text, autoListenAfter = false) => {
+    if (!isVoiceEnabled || !window.speechSynthesis) {
+      if (autoListenAfter) setTimeout(handleListen, 1000);
+      return;
+    }
     
     window.speechSynthesis.cancel();
     setMode("speaking");
@@ -33,16 +37,33 @@ const Aisha = ({ user, onLogout }) => {
     utterance.lang = 'en-US'; 
     utterance.rate = 1.0;
 
-    utterance.onend = () => setMode("idle");
+    utterance.onend = () => {
+      setMode("idle");
+      if (autoListenAfter) {
+        handleListen(); // Start listening automatically!
+      }
+    };
+
+    utterance.onerror = () => {
+      setMode("idle");
+      if (autoListenAfter) handleListen();
+    };
+
     window.speechSynthesis.speak(utterance);
   };
 
   // --- 2. THE REAL BRAIN (Gemini API) ---
   const callGemini = async (userText) => {
     setMode("processing");
+    setErrorMessage(""); // Clear old errors
 
-    // 1. Build the context for the AI
-    // We give it a "Persona" and the history of what was just said.
+    if (!API_KEY || API_KEY.length < 5) {
+      setErrorMessage("System Failure: API Key is missing or invalid in your .env file.");
+      speak("My systems are offline because the API key is missing.");
+      setMode("idle");
+      return;
+    }
+
     const systemPrompt = `
       You are Aisha, a high-end Residence Assistant for Emaar.
       Your tone is professional, warm, and concise.
@@ -57,13 +78,13 @@ const Aisha = ({ user, onLogout }) => {
       4. Keep responses short (under 2 sentences) so they are easy to speak.
     `;
 
-    // 2. Prepare the message history for the API
     const historyText = conversation.map(c => `${c.role}: ${c.text}`).join("\n");
     const fullPrompt = `${systemPrompt}\n\nCONVERSATION HISTORY:\n${historyText}\nUser: ${userText}\nAisha:`;
 
     try {
-      // 3. Call the API
-      const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${API_KEY}`, {
+      const fetchUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${API_KEY}`;
+      
+      const res = await fetch(fetchUrl, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -71,22 +92,32 @@ const Aisha = ({ user, onLogout }) => {
         })
       });
 
-      const data = await response.json();
+      if (!res.ok) {
+        const errorData = await res.json();
+        const apiErrorMsg = errorData?.error?.message || `HTTP ${res.status}`;
+        setErrorMessage(`Google API Rejected: ${apiErrorMsg}`);
+        throw new Error(apiErrorMsg);
+      }
+
+      const data = await res.json();
       const aiText = data.candidates[0].content.parts[0].text;
 
-      // 4. Handle "Secret Actions" (The UI Trigger)
       let finalSpeech = aiText;
       if (aiText.includes("[ACTION:CONFIRM_CARD]")) {
         setShowSuccessCard(true);
         finalSpeech = aiText.replace("[ACTION:CONFIRM_CARD]", "").trim();
       }
 
-      // 5. Update Memory & Speak
       setConversation(prev => [...prev, { role: "User", text: userText }, { role: "Aisha", text: finalSpeech }]);
-      speak(finalSpeech);
+      speak(finalSpeech, true); // <--- Auto-listen after she replies!
 
     } catch (error) {
-      console.error("AI Error:", error);
+      console.error("AI Brain Connection Error:", error);
+      if (error.message === "Failed to fetch") {
+        setErrorMessage("Network Error: Failed to fetch. Ensure no adblockers or VPNs are blocking Google APIs.");
+      } else if (!errorMessage) {
+        setErrorMessage(`Connection Error: ${error.message}`);
+      }
       speak("I am having trouble connecting to the residence server. Please try again.");
       setMode("idle");
     }
@@ -101,7 +132,10 @@ const Aisha = ({ user, onLogout }) => {
     }
 
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-    if (!SpeechRecognition) return alert("Chrome is required for voice.");
+    if (!SpeechRecognition) {
+      setErrorMessage("Browser Error: Chrome is required for voice recognition.");
+      return;
+    }
 
     const recognition = new SpeechRecognition();
     recognition.lang = 'en-US';
@@ -110,17 +144,25 @@ const Aisha = ({ user, onLogout }) => {
     recognition.onstart = () => {
       setMode("listening");
       setTranscript("");
+      setErrorMessage(""); // clear errors when starting a new command
     };
 
     recognition.onresult = (event) => {
       setTranscript(event.results[0][0].transcript);
     };
 
+    recognition.onerror = (event) => {
+      console.error("Mic error:", event.error);
+      if (event.error === 'not-allowed') {
+        setErrorMessage("Microphone access was denied. Please click 'Allow' in your browser URL bar.");
+      }
+      setMode("idle");
+    };
+
     recognition.onend = () => {
-      // Use a timeout to ensure we capture the final state
       setTranscript(currentText => {
         if (currentText.trim()) {
-          callGemini(currentText); // <--- CALLING THE API HERE
+          callGemini(currentText);
         } else {
           setMode("idle");
         }
@@ -128,26 +170,41 @@ const Aisha = ({ user, onLogout }) => {
       });
     };
 
-    recognition.start();
+    try {
+      recognition.start();
+    } catch (e) {
+      console.error("Failed to start mic:", e);
+    }
   };
 
   // --- INIT ---
   useEffect(() => {
     const greeting = `Hello ${residentName}. I am Aisha. How can I help you?`;
-    // Add greeting to memory so AI knows it happened
     setConversation([{ role: "Aisha", text: greeting }]);
     
-    // Wait for voices
+    const initVoice = () => speak(greeting, true); // true = autoListen after greeting
+    
     if (window.speechSynthesis.getVoices().length > 0) {
-      setTimeout(() => speak(greeting), 800);
+      setTimeout(initVoice, 800);
     } else {
-      window.speechSynthesis.onvoiceschanged = () => speak(greeting);
+      window.speechSynthesis.onvoiceschanged = initVoice;
     }
   }, [residentName]);
 
   return (
     <div className="relative w-full h-screen bg-black overflow-hidden flex flex-col items-center justify-center font-sans text-white select-none">
       
+      {/* NEW: LIVE ERROR HUD */}
+      {errorMessage && (
+        <div className="absolute top-6 left-1/2 transform -translate-x-1/2 bg-red-950/90 border border-red-500 text-white px-6 py-4 rounded-xl shadow-[0_0_30px_rgba(239,68,68,0.3)] z-[100] text-center w-[90%] max-w-2xl backdrop-blur-md animate-in slide-in-from-top-4 duration-300">
+          <div className="flex items-center gap-2 mb-2 justify-center">
+            <AlertCircle size={20} className="text-red-400" />
+            <span className="font-bold text-sm tracking-widest uppercase text-red-400">System Error Detected</span>
+          </div>
+          <p className="text-sm font-mono opacity-90">{errorMessage}</p>
+        </div>
+      )}
+
       {/* 1. BACKGROUND GRID */}
       <div className="absolute inset-0 z-0 opacity-20" 
            style={{ 
@@ -183,7 +240,7 @@ const Aisha = ({ user, onLogout }) => {
 
       {/* 3. SUCCESS CARD */}
       {showSuccessCard && (
-        <div className="absolute top-20 z-50 animate-in fade-in zoom-in slide-in-from-top-4 duration-500">
+        <div className="absolute top-24 z-50 animate-in fade-in zoom-in slide-in-from-top-4 duration-500">
           <div className="bg-white/10 backdrop-blur-xl border border-white/20 p-6 rounded-3xl w-80 shadow-[0_20px_50px_rgba(0,0,0,0.5)]">
              <div className="bg-green-500 w-10 h-10 rounded-full flex items-center justify-center mb-4 mx-auto shadow-lg shadow-green-500/50">
                 <Sparkles size={20} className="text-white" />
@@ -239,14 +296,6 @@ const Aisha = ({ user, onLogout }) => {
         </div>
       </div>
       
-      {/* 6. NO API KEY WARNING */}
-      {(!API_KEY) && (
-        <div className="absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 bg-red-500/90 text-white p-6 rounded-xl shadow-2xl z-[100] text-center w-80">
-          <AlertCircle size={40} className="mx-auto mb-4" />
-          <h3 className="font-bold text-lg mb-2">API Key Missing</h3>
-          <p className="text-sm">Please check your .env file and restart the server.</p>
-        </div>
-      )}
     </div>
   );
 };

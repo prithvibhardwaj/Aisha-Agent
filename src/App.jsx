@@ -1,39 +1,22 @@
-import React, { useState, useEffect } from 'react';
+import React from 'react';
 import Aisha from './components/Aisha';
-import Login from './components/Login';
+// import Login from './components/Login'; // Keeping this commented out so you don't lose the file
 
-function App() {
-  const [user, setUser] = useState(null);
-
-  useEffect(() => {
-    // Check if a user is currently logged in (Active Session)
-    const activeSession = sessionStorage.getItem('emaar_active_user');
-    if (activeSession) {
-      setUser(JSON.parse(activeSession));
-    }
-  }, []);
-
-  const handleLogin = (userData) => {
-    setUser(userData);
-    // Save the ACTIVE session
-    sessionStorage.setItem('emaar_active_user', JSON.stringify(userData));
-  };
-
-  const handleLogout = () => {
-    setUser(null);
-    // Clear the ACTIVE session (but keep the registered users in the DB)
-    sessionStorage.removeItem('emaar_active_user');
+const App = () => {
+  // Hardcoded developer user to bypass the login state
+  const devUser = {
+    name: "Prithvi",
+    email: "admin@local.dev"
   };
 
   return (
-    <div>
-      {user ? (
-        <Aisha user={user} onLogout={handleLogout} />
-      ) : (
-        <Login onLogin={handleLogin} />
-      )}
+    <div className="w-full h-screen bg-black overflow-hidden">
+      <Aisha 
+        user={devUser} 
+        onLogout={() => console.log("Logout button clicked. Login flow is bypassed for local testing.")} 
+      />
     </div>
   );
-}
+};
 
 export default App;
