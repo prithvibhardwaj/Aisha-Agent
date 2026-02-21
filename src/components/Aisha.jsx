@@ -1,64 +1,72 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Mic, Volume2, VolumeX, LogOut, Activity, Sparkles, AlertCircle } from 'lucide-react';
 
 // --- CONFIGURATION ---
-const API_KEY = import.meta.env.VITE_GEMINI_API_KEY || "";
+const API_KEY = import.meta.env.VITE_GROQ_API_KEY || "";
 const RESIDENT_NAME = "Prithvi";
 const FEE_AMOUNT = "250 AED";
 
 const Aisha = ({ user, onLogout }) => {
-  const [mode, setMode] = useState("idle"); // idle, listening, processing, speaking
+  const [systemStarted, setSystemStarted] = useState(false);
+  const [mode, setMode] = useState("idle"); 
   const [transcript, setTranscript] = useState("");
   const [response, setResponse] = useState("");
   const [isVoiceEnabled, setIsVoiceEnabled] = useState(true);
   const [showSuccessCard, setShowSuccessCard] = useState(false);
   const [conversation, setConversation] = useState([]); 
-  const [errorMessage, setErrorMessage] = useState(""); // NEW: Live Error Tracking
+  const [errorMessage, setErrorMessage] = useState(""); 
+  
+  const utteranceRef = useRef(null);
   
   const residentName = user?.name || RESIDENT_NAME;
 
   // --- 1. VOICE OUTPUT ---
-  // Added "autoListenAfter" parameter to trigger the mic when she stops talking
   const speak = (text, autoListenAfter = false) => {
     if (!isVoiceEnabled || !window.speechSynthesis) {
       if (autoListenAfter) setTimeout(handleListen, 1000);
       return;
     }
     
+    if (utteranceRef.current) {
+      utteranceRef.current.onend = null;
+      utteranceRef.current.onerror = null;
+    }
     window.speechSynthesis.cancel();
+    
     setMode("speaking");
     setResponse(text);
 
-    const utterance = new SpeechSynthesisUtterance(text);
+    utteranceRef.current = new SpeechSynthesisUtterance(text);
     const voices = window.speechSynthesis.getVoices();
     const femaleVoice = voices.find(v => v.name.includes('Google US English') || v.name.includes('Samantha') || v.name.includes('Female'));
     
-    if (femaleVoice) utterance.voice = femaleVoice;
-    utterance.lang = 'en-US'; 
-    utterance.rate = 1.0;
+    if (femaleVoice) utteranceRef.current.voice = femaleVoice;
+    utteranceRef.current.lang = 'en-US'; 
+    utteranceRef.current.rate = 1.0;
 
-    utterance.onend = () => {
+    utteranceRef.current.onend = () => {
       setMode("idle");
       if (autoListenAfter) {
-        handleListen(); // Start listening automatically!
+        handleListen(); 
       }
     };
 
-    utterance.onerror = () => {
+    utteranceRef.current.onerror = (e) => {
+      console.error("Speech Synthesis Error:", e);
       setMode("idle");
       if (autoListenAfter) handleListen();
     };
 
-    window.speechSynthesis.speak(utterance);
+    window.speechSynthesis.speak(utteranceRef.current);
   };
 
-  // --- 2. THE REAL BRAIN (Gemini API) ---
-  const callGemini = async (userText) => {
+  // --- 2. THE REAL BRAIN (Groq API using Llama 3.1) ---
+  const callAI = async (userText) => {
     setMode("processing");
-    setErrorMessage(""); // Clear old errors
+    setErrorMessage(""); 
 
     if (!API_KEY || API_KEY.length < 5) {
-      setErrorMessage("System Failure: API Key is missing or invalid in your .env file.");
+      setErrorMessage("System Failure: Groq API Key is missing or invalid in your .env file.");
       speak("My systems are offline because the API key is missing.");
       setMode("idle");
       return;
@@ -71,50 +79,67 @@ const Aisha = ({ user, onLogout }) => {
       User Name: ${residentName}
       Current Fee for Lost Card: ${FEE_AMOUNT}
       
-      PROTOCOL:
-      1. If user says they lost a card, express sympathy and ask WHEN they lost it.
-      2. If they give a time (any time, like "yesterday", "2 days ago", "last week"), tell them the replacement cost (${FEE_AMOUNT}) will be added to their bill and ask to proceed.
-      3. If they confirm (yes/sure/go ahead), say "Request confirmed" and output the exact secret tag: [ACTION:CONFIRM_CARD].
-      4. Keep responses short (under 2 sentences) so they are easy to speak.
+      STRICT PROTOCOL (Follow in exact order, read history to know your current step):
+      STEP 1: If the user says they lost a card, express sympathy and ask WHEN they lost it.
+      STEP 2: Once the user provides a time (like "yesterday", "2 days ago"), inform them the replacement cost is ${FEE_AMOUNT} and ask if they want to proceed. DO NOT ask when they lost it again.
+      STEP 3: Once the user confirms (like "yes", "sure", "do it"), say "Request confirmed" and output EXACTLY: [ACTION:CONFIRM_CARD]. DO NOT ask any previous questions.
+      
+      RULES:
+      - Keep responses under 2 sentences.
+      - NEVER loop back to a previous step.
     `;
 
-    const historyText = conversation.map(c => `${c.role}: ${c.text}`).join("\n");
-    const fullPrompt = `${systemPrompt}\n\nCONVERSATION HISTORY:\n${historyText}\nUser: ${userText}\nAisha:`;
+    const formattedMessages = [
+      { role: "system", content: systemPrompt },
+      ...conversation.map(c => ({
+        role: c.role === "User" ? "user" : "assistant",
+        content: c.text
+      })),
+      { role: "user", content: userText }
+    ];
 
     try {
-      const fetchUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${API_KEY}`;
-      
-      const res = await fetch(fetchUrl, {
+      const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { 
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${API_KEY}`
+        },
         body: JSON.stringify({
-          contents: [{ parts: [{ text: fullPrompt }] }]
+          model: "llama-3.1-8b-instant", 
+          messages: formattedMessages,
+          temperature: 0.2
         })
       });
 
       if (!res.ok) {
         const errorData = await res.json();
         const apiErrorMsg = errorData?.error?.message || `HTTP ${res.status}`;
-        setErrorMessage(`Google API Rejected: ${apiErrorMsg}`);
+        setErrorMessage(`Groq API Rejected: ${apiErrorMsg}`);
         throw new Error(apiErrorMsg);
       }
 
       const data = await res.json();
-      const aiText = data.candidates[0].content.parts[0].text;
+      const aiText = data.choices[0].message.content;
 
       let finalSpeech = aiText;
       if (aiText.includes("[ACTION:CONFIRM_CARD]")) {
         setShowSuccessCard(true);
         finalSpeech = aiText.replace("[ACTION:CONFIRM_CARD]", "").trim();
+        
+        // FIX: Automatically hide the success card after 2 seconds (2000ms)
+        setTimeout(() => {
+          setShowSuccessCard(false);
+        }, 2000);
       }
 
       setConversation(prev => [...prev, { role: "User", text: userText }, { role: "Aisha", text: finalSpeech }]);
-      speak(finalSpeech, true); // <--- Auto-listen after she replies!
+      speak(finalSpeech, true); 
 
     } catch (error) {
       console.error("AI Brain Connection Error:", error);
       if (error.message === "Failed to fetch") {
-        setErrorMessage("Network Error: Failed to fetch. Ensure no adblockers or VPNs are blocking Google APIs.");
+        setErrorMessage("Network Error: Failed to fetch. Ensure no adblockers or VPNs are blocking Groq APIs.");
       } else if (!errorMessage) {
         setErrorMessage(`Connection Error: ${error.message}`);
       }
@@ -126,6 +151,10 @@ const Aisha = ({ user, onLogout }) => {
   // --- 3. VOICE INPUT ---
   const handleListen = () => {
     if (mode === "listening" || mode === "speaking") {
+      if (utteranceRef.current) {
+        utteranceRef.current.onend = null;
+        utteranceRef.current.onerror = null;
+      }
       window.speechSynthesis.cancel();
       setMode("idle");
       return;
@@ -144,7 +173,7 @@ const Aisha = ({ user, onLogout }) => {
     recognition.onstart = () => {
       setMode("listening");
       setTranscript("");
-      setErrorMessage(""); // clear errors when starting a new command
+      setErrorMessage(""); 
     };
 
     recognition.onresult = (event) => {
@@ -162,7 +191,7 @@ const Aisha = ({ user, onLogout }) => {
     recognition.onend = () => {
       setTranscript(currentText => {
         if (currentText.trim()) {
-          callGemini(currentText);
+          callAI(currentText);
         } else {
           setMode("idle");
         }
@@ -179,22 +208,39 @@ const Aisha = ({ user, onLogout }) => {
 
   // --- INIT ---
   useEffect(() => {
+    if (!systemStarted) return; 
+
     const greeting = `Hello ${residentName}. I am Aisha. How can I help you?`;
     setConversation([{ role: "Aisha", text: greeting }]);
     
-    const initVoice = () => speak(greeting, true); // true = autoListen after greeting
+    const initVoice = () => speak(greeting, true); 
     
     if (window.speechSynthesis.getVoices().length > 0) {
       setTimeout(initVoice, 800);
     } else {
       window.speechSynthesis.onvoiceschanged = initVoice;
     }
-  }, [residentName]);
+  }, [residentName, systemStarted]);
+
+
+  // --- PRE-START SCREEN ---
+  if (!systemStarted) {
+    return (
+      <div className="w-full h-screen bg-black flex items-center justify-center font-sans">
+         <button 
+           onClick={() => setSystemStarted(true)}
+           className="px-8 py-4 bg-cyan-950/30 border border-cyan-500/50 text-cyan-400 rounded-full hover:bg-cyan-900/50 transition-all tracking-[0.2em] uppercase text-sm animate-pulse shadow-[0_0_30px_rgba(6,182,212,0.2)]"
+         >
+           Initialize System
+         </button>
+      </div>
+    );
+  }
 
   return (
     <div className="relative w-full h-screen bg-black overflow-hidden flex flex-col items-center justify-center font-sans text-white select-none">
       
-      {/* NEW: LIVE ERROR HUD */}
+      {/* LIVE ERROR HUD */}
       {errorMessage && (
         <div className="absolute top-6 left-1/2 transform -translate-x-1/2 bg-red-950/90 border border-red-500 text-white px-6 py-4 rounded-xl shadow-[0_0_30px_rgba(239,68,68,0.3)] z-[100] text-center w-[90%] max-w-2xl backdrop-blur-md animate-in slide-in-from-top-4 duration-300">
           <div className="flex items-center gap-2 mb-2 justify-center">
