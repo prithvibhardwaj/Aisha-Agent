@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { Mic, Volume2, VolumeX, LogOut, Activity, Sparkles, AlertCircle } from 'lucide-react';
 
 // --- CONFIGURATION ---
-const API_KEY = import.meta.env.VITE_GROQ_API_KEY || "";
+const API_KEY = import.meta.env.VITE_ANTHROPIC_API_KEY || "";
 const RESIDENT_NAME = "Prithvi";
 const FEE_AMOUNT = "250 AED";
 
@@ -17,6 +17,9 @@ const Aisha = ({ user, onLogout }) => {
   const [errorMessage, setErrorMessage] = useState(""); 
   
   const utteranceRef = useRef(null);
+  const recognitionRef = useRef(null);
+  const manualStopRef = useRef(false);
+  const finalTranscriptRef = useRef("");
   
   const residentName = user?.name || RESIDENT_NAME;
 
@@ -60,97 +63,76 @@ const Aisha = ({ user, onLogout }) => {
     window.speechSynthesis.speak(utteranceRef.current);
   };
 
-  // --- 2. THE REAL BRAIN (Groq API using Llama 3.1) ---
+  // --- 2. AI BRAIN (Anthropic Messages API) ---
   const callAI = async (userText) => {
-    setMode("processing");
-    setErrorMessage(""); 
-
-    if (!API_KEY || API_KEY.length < 5) {
-      setErrorMessage("System Failure: Groq API Key is missing or invalid in your .env file.");
-      speak("My systems are offline because the API key is missing.");
-      setMode("idle");
-      return;
-    }
-
-    const systemPrompt = `
-      You are Aisha, a high-end Residence Assistant for Emaar.
-      Your tone is professional, warm, and concise.
-      
-      User Name: ${residentName}
-      Current Fee for Lost Card: ${FEE_AMOUNT}
-      
-      STRICT PROTOCOL (Follow in exact order, read history to know your current step):
-      STEP 1: If the user says they lost a card, express sympathy and ask WHEN they lost it.
-      STEP 2: Once the user provides a time (like "yesterday", "2 days ago"), inform them the replacement cost is ${FEE_AMOUNT} and ask if they want to proceed. DO NOT ask when they lost it again.
-      STEP 3: Once the user confirms (like "yes", "sure", "do it"), say "Request confirmed" and output EXACTLY: [ACTION:CONFIRM_CARD]. DO NOT ask any previous questions.
-      
-      RULES:
-      - Keep responses under 2 sentences.
-      - NEVER loop back to a previous step.
-    `;
-
-    const formattedMessages = [
-      { role: "system", content: systemPrompt },
-      ...conversation.map(c => ({
-        role: c.role === "User" ? "user" : "assistant",
-        content: c.text
-      })),
-      { role: "user", content: userText }
-    ];
-
     try {
-      const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+      setMode("processing");
+      setErrorMessage("");
+
+      if (!API_KEY || API_KEY.length < 5) {
+        throw new Error("Anthropic API key is missing (VITE_ANTHROPIC_API_KEY).");
+      }
+
+      const systemPrompt = `You are Aisha, a calm, concise, helpful concierge assistant for ${residentName}. Keep responses short, actionable, and friendly.`;
+
+      const res = await fetch("https://api.anthropic.com/v1/messages", {
         method: "POST",
-        headers: { 
+        headers: {
           "Content-Type": "application/json",
-          "Authorization": `Bearer ${API_KEY}`
+          "x-api-key": API_KEY,
+          "anthropic-version": "2023-06-01",
+          "anthropic-dangerous-direct-browser-access": "true",
         },
         body: JSON.stringify({
-          model: "llama-3.1-8b-instant", 
-          messages: formattedMessages,
-          temperature: 0.2
-        })
+          model: "claude-haiku-4-5-20251001",
+          max_tokens: 300,
+          system: systemPrompt,
+          messages: [
+            ...conversation.map((c) => ({
+              role: c.role === "User" ? "user" : "assistant",
+              content: c.text,
+            })),
+            { role: "user", content: userText },
+          ],
+        }),
       });
 
       if (!res.ok) {
-        const errorData = await res.json();
-        const apiErrorMsg = errorData?.error?.message || `HTTP ${res.status}`;
-        setErrorMessage(`Groq API Rejected: ${apiErrorMsg}`);
-        throw new Error(apiErrorMsg);
+        const errText = await res.text().catch(() => "");
+        throw new Error(`Anthropic request failed (${res.status}). ${errText}`.trim());
       }
 
       const data = await res.json();
-      const aiText = data.choices[0].message.content;
+      const assistantText =
+        (Array.isArray(data?.content) ? data.content.map((b) => b?.text).filter(Boolean).join("\n") : "") ||
+        data?.message?.content ||
+        "";
 
-      let finalSpeech = aiText;
-      if (aiText.includes("[ACTION:CONFIRM_CARD]")) {
-        setShowSuccessCard(true);
-        finalSpeech = aiText.replace("[ACTION:CONFIRM_CARD]", "").trim();
-        
-        // FIX: Automatically hide the success card after 2 seconds (2000ms)
-        setTimeout(() => {
-          setShowSuccessCard(false);
-        }, 2000);
-      }
-
-      setConversation(prev => [...prev, { role: "User", text: userText }, { role: "Aisha", text: finalSpeech }]);
-      speak(finalSpeech, true); 
-
-    } catch (error) {
-      console.error("AI Brain Connection Error:", error);
-      if (error.message === "Failed to fetch") {
-        setErrorMessage("Network Error: Failed to fetch. Ensure no adblockers or VPNs are blocking Groq APIs.");
-      } else if (!errorMessage) {
-        setErrorMessage(`Connection Error: ${error.message}`);
-      }
-      speak("I am having trouble connecting to the residence server. Please try again.");
+      const finalSpeech = assistantText.trim() || "I’m sorry — I didn’t get a response. Please try again.";
+      setConversation((prev) => [...prev, { role: "User", text: userText }, { role: "Aisha", text: finalSpeech }]);
+      speak(finalSpeech, true);
+    } catch (e) {
+      console.error("AI call failed:", e);
       setMode("idle");
+      setErrorMessage(`AI Error: ${e?.message || "Unknown error"}`);
     }
   };
 
   // --- 3. VOICE INPUT ---
   const handleListen = () => {
-    if (mode === "listening" || mode === "speaking") {
+    // If user clicks while listening, treat it as a pause (no AI call).
+    if (mode === "listening") {
+      manualStopRef.current = true;
+      try {
+        recognitionRef.current?.stop?.();
+      } catch (e) {
+        console.error("Failed to stop mic:", e);
+      }
+      setMode("idle");
+      return;
+    }
+
+    if (mode === "speaking") {
       if (utteranceRef.current) {
         utteranceRef.current.onend = null;
         utteranceRef.current.onerror = null;
@@ -167,17 +149,34 @@ const Aisha = ({ user, onLogout }) => {
     }
 
     const recognition = new SpeechRecognition();
+    recognitionRef.current = recognition;
     recognition.lang = 'en-US';
     recognition.interimResults = true;
 
     recognition.onstart = () => {
       setMode("listening");
-      setTranscript("");
+      // If we already have text (from an accidental pause), keep it and continue.
+      finalTranscriptRef.current = transcript?.trim() ? transcript.trim() : "";
       setErrorMessage(""); 
     };
 
     recognition.onresult = (event) => {
-      setTranscript(event.results[0][0].transcript);
+      let interim = "";
+      let finalAdd = "";
+
+      for (let i = event.resultIndex; i < event.results.length; i++) {
+        const result = event.results[i];
+        const text = result?.[0]?.transcript || "";
+        if (result.isFinal) finalAdd += text + " ";
+        else interim += text + " ";
+      }
+
+      if (finalAdd.trim()) {
+        finalTranscriptRef.current = `${finalTranscriptRef.current} ${finalAdd}`.trim();
+      }
+
+      const combined = `${finalTranscriptRef.current} ${interim}`.trim();
+      setTranscript(combined);
     };
 
     recognition.onerror = (event) => {
@@ -189,14 +188,15 @@ const Aisha = ({ user, onLogout }) => {
     };
 
     recognition.onend = () => {
-      setTranscript(currentText => {
-        if (currentText.trim()) {
-          callAI(currentText);
-        } else {
-          setMode("idle");
-        }
-        return currentText;
-      });
+      if (manualStopRef.current) {
+        manualStopRef.current = false;
+        setMode("idle");
+        return;
+      }
+
+      const finalText = finalTranscriptRef.current.trim();
+      if (finalText) callAI(finalText);
+      else setMode("idle");
     };
 
     try {
